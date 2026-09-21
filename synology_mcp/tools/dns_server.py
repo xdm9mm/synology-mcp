@@ -1,18 +1,22 @@
 """DNS Server package tools (Eddington fork extension — see docs/EDDINGTON_EXTENSIONS.md).
 
-UNVERIFIED ENDPOINT NAMES. The SYNO.DNSServer.* calls below are a best-effort
-guess based on Synology's public API naming convention, not confirmed against
-a real DSM instance or Synology's official "DNS Server API Guide" PDF. Before
-relying on these:
+Read tools (dns_list_zones, dns_list_records) are VERIFIED — tested live against
+Vault (Synology DS718+, DSM 7.3.2, DNS Server package) on 2026-09-21 via
+discover_apis + direct conn.call probing. Real field names, not guesses:
 
-1. Deploy this fork against a NAS with the DNS Server package installed.
-2. Run the existing `discover_apis` tool (tools/diagnostic.py) and grep its
-   output for "DNSServer" to get the real API names, versions, and CGI paths.
-3. Correct every `conn.call(...)` below to match, then remove this notice.
+- SYNO.DNSServer.Zone / list (no params) -> {"items": [...], "total": N}, each
+  item: domain_name, zone_name, zone_type, zone_enable, is_readonly.
+- SYNO.DNSServer.Zone.Record / list (params: domain_name AND zone_name, both
+  required, both equal to the zone e.g. "eddington.place") ->
+  {"items": [...], "total": N}, each item: rr_owner, rr_type, rr_info, rr_ttl,
+  full_record.
 
-Modeled on the request/response/error-handling shape already used throughout
-tools/diagnostic.py (one try/except per NAS connection, soft {"error": ...}
-on failure rather than raising).
+Write tools (dns_create_record, dns_delete_record) are STILL UNVERIFIED — the
+method names ("create"/"delete") and whether they take the same
+domain_name+zone_name pair as list, plus the rr_owner/rr_type/rr_info/rr_ttl
+param shape, are an educated guess extrapolated from the verified list schema,
+not tested live (a live test would actually mutate the eddington.place zone).
+Verify against a disposable test zone/record before trusting these.
 """
 
 from fastmcp import FastMCP
@@ -21,14 +25,11 @@ from ..client import SynologyClient
 
 
 def register_dns_read_tools(mcp: FastMCP, client: SynologyClient) -> None:
-    """Read-only DNS Server tools — zone and record listing."""
+    """Read-only DNS Server tools — zone and record listing. VERIFIED 2026-09-21."""
 
     @mcp.tool
     async def dns_list_zones(nas: str | None = None) -> dict:
         """List DNS Server zones configured on the NAS.
-
-        UNVERIFIED — see module docstring. Expected to map to something like
-        SYNO.DNSServer.Zone / list.
 
         Args:
             nas: NAS name (e.g., 'vault'). If omitted, queries all.
@@ -46,13 +47,15 @@ def register_dns_read_tools(mcp: FastMCP, client: SynologyClient) -> None:
                 )
                 zones = [
                     {
-                        "name": z.get("zone_name") or z.get("name"),
-                        "type": z.get("zone_type") or z.get("type"),
-                        "status": z.get("status"),
+                        "zone_name": z.get("zone_name"),
+                        "domain_name": z.get("domain_name"),
+                        "zone_type": z.get("zone_type"),
+                        "enabled": z.get("zone_enable"),
+                        "readonly": z.get("is_readonly"),
                     }
-                    for z in data.get("zones", data.get("items", []))
+                    for z in data.get("items", [])
                 ]
-                results[name] = {"zone_count": len(zones), "zones": zones}
+                results[name] = {"zone_count": data.get("total", len(zones)), "zones": zones}
             except Exception as e:
                 results[name] = {"error": str(e)}
         return results
@@ -60,9 +63,6 @@ def register_dns_read_tools(mcp: FastMCP, client: SynologyClient) -> None:
     @mcp.tool
     async def dns_list_records(nas: str, zone_name: str) -> dict:
         """List resource records within a DNS Server zone.
-
-        UNVERIFIED — see module docstring. Expected to map to something like
-        SYNO.DNSServer.Zone.Master.Record / list, scoped by zone_name.
 
         Args:
             nas: NAS name (e.g., 'vault'). Required — records are per-zone,
@@ -80,27 +80,28 @@ def register_dns_read_tools(mcp: FastMCP, client: SynologyClient) -> None:
         conn = connections[name]
         try:
             data = await conn.call(
-                "SYNO.DNSServer.Zone.Master.Record",
+                "SYNO.DNSServer.Zone.Record",
                 "list",
                 version=1,
+                domain_name=zone_name,
                 zone_name=zone_name,
             )
             records = [
                 {
-                    "name": r.get("owner") or r.get("name"),
-                    "type": r.get("type"),
-                    "value": r.get("data") or r.get("value"),
-                    "ttl": r.get("ttl"),
+                    "name": r.get("rr_owner"),
+                    "type": r.get("rr_type"),
+                    "value": r.get("rr_info"),
+                    "ttl": r.get("rr_ttl"),
                 }
-                for r in data.get("records", data.get("items", []))
+                for r in data.get("items", [])
             ]
-            return {"zone_name": zone_name, "record_count": len(records), "records": records}
+            return {"zone_name": zone_name, "record_count": data.get("total", len(records)), "records": records}
         except Exception as e:
             return {"error": str(e), "nas": name, "zone_name": zone_name}
 
 
 def register_dns_write_tools(mcp: FastMCP, client: SynologyClient) -> None:
-    """Mutating DNS Server tools — record create/delete (confirm-gated)."""
+    """Mutating DNS Server tools — record create/delete (confirm-gated). UNVERIFIED."""
 
     @mcp.tool
     async def dns_create_record(
@@ -114,8 +115,10 @@ def register_dns_write_tools(mcp: FastMCP, client: SynologyClient) -> None:
     ) -> dict:
         """Create a DNS resource record in a DNS Server zone.
 
-        UNVERIFIED — see module docstring. Expected to map to something like
-        SYNO.DNSServer.Zone.Master.Record / create.
+        STILL UNVERIFIED — see module docstring. The list schema (rr_owner/
+        rr_type/rr_info/rr_ttl, domain_name+zone_name params) is confirmed live;
+        the create method name and whether it accepts this same param shape is
+        not — verify against a disposable test record before trusting this.
 
         Args:
             nas: NAS name (e.g., 'vault'). Required.
@@ -149,20 +152,22 @@ def register_dns_write_tools(mcp: FastMCP, client: SynologyClient) -> None:
                 "record": {"name": record_name, "type": record_type, "value": value, "ttl": ttl},
                 "warning": (
                     f"This will create a {record_type} record '{record_name}' in zone "
-                    f"'{zone_name}' pointing to '{value}'. Set confirm=True to proceed."
+                    f"'{zone_name}' pointing to '{value}'. Set confirm=True to proceed. "
+                    "NOTE: this call is UNVERIFIED against a real DSM instance."
                 ),
             }
 
         try:
             await conn.call(
-                "SYNO.DNSServer.Zone.Master.Record",
+                "SYNO.DNSServer.Zone.Record",
                 "create",
                 version=1,
+                domain_name=zone_name,
                 zone_name=zone_name,
-                name=record_name,
-                type=record_type,
-                data=value,
-                ttl=ttl,
+                rr_owner=record_name,
+                rr_type=record_type,
+                rr_info=value,
+                rr_ttl=str(ttl),
             )
             return {
                 "success": True,
@@ -184,8 +189,7 @@ def register_dns_write_tools(mcp: FastMCP, client: SynologyClient) -> None:
     ) -> dict:
         """Delete a DNS resource record from a DNS Server zone.
 
-        UNVERIFIED — see module docstring. Expected to map to something like
-        SYNO.DNSServer.Zone.Master.Record / delete.
+        STILL UNVERIFIED — see module docstring and dns_create_record's caveat.
 
         Args:
             nas: NAS name (e.g., 'vault'). Required.
@@ -214,18 +218,20 @@ def register_dns_write_tools(mcp: FastMCP, client: SynologyClient) -> None:
                 "record": {"name": record_name, "type": record_type},
                 "warning": (
                     f"This will permanently delete the {record_type} record "
-                    f"'{record_name}' from zone '{zone_name}'. Set confirm=True to proceed."
+                    f"'{record_name}' from zone '{zone_name}'. Set confirm=True to proceed. "
+                    "NOTE: this call is UNVERIFIED against a real DSM instance."
                 ),
             }
 
         try:
             await conn.call(
-                "SYNO.DNSServer.Zone.Master.Record",
+                "SYNO.DNSServer.Zone.Record",
                 "delete",
                 version=1,
+                domain_name=zone_name,
                 zone_name=zone_name,
-                name=record_name,
-                type=record_type,
+                rr_owner=record_name,
+                rr_type=record_type,
             )
             return {
                 "success": True,
