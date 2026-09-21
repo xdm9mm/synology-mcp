@@ -62,9 +62,13 @@ path is unverified. Before trusting these: test against a disposable record (e.g
 throwaway name in a test zone, or accept the risk on a real record you can easily
 re-add) and a device where an extra manual backup run is genuinely low-cost.
 
-## Bonus finding from this deployment
+## Finding from this deployment
 
 `abb_list_devices` surfaced a 4th device, `HSERVER-W1` (192.168.1.125, Windows 11) —
-this is the Windows Pro boot of the same physical hardware as `hServer-L1` (dual-boot
-box, see `eddington-shared/data/devices.yaml`), whose IP wasn't previously recorded.
-Worth backfilling into `devices.yaml`.
+this is `hServer-L1`'s hardware's *original factory Windows install*, since
+completely wiped when the disk became Debian 13. Not a live parallel identity. The
+backup is being kept intentionally as a revert path (same pattern as the hLaptop
+Windows→Ubuntu migration's keep-both-image-chains decision) — see
+`eddington-shared/data/devices.yaml`'s `hServer-L1` entry, which also notes its
+recurring backup schedule will keep failing against a host that no longer exists and
+is a candidate to disable (schedule only, not the device or its stored data).
