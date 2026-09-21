@@ -9,6 +9,8 @@ from .tools.diagnostic import register_diagnostic_tools
 from .tools.files_read import register_read_tools
 from .tools.files_write import register_write_tools
 from .tools.power import register_power_tools
+from .tools.dns_server import register_dns_read_tools, register_dns_write_tools
+from .tools.active_backup import register_backup_read_tools, register_backup_write_tools
 
 
 def create_server(config: AppConfig, client: SynologyClient) -> FastMCP:
@@ -18,13 +20,15 @@ def create_server(config: AppConfig, client: SynologyClient) -> FastMCP:
     if tier == "write":
         desc = (
             "Provides full access to Synology NAS: health monitoring, "
-            "storage diagnostics, file browsing, file management, and power management. "
+            "storage diagnostics, file browsing, file management, power management, "
+            "DNS Server zone/record management, and Active Backup for Business control. "
             "Query one or all configured NAS units."
         )
     elif tier == "read":
         desc = (
             "Provides read access to Synology NAS: health monitoring, "
-            "storage diagnostics, and file browsing. "
+            "storage diagnostics, file browsing, DNS Server zone/record listing, "
+            "and Active Backup for Business status. "
             "Query one or all configured NAS units."
         )
     else:
@@ -39,13 +43,17 @@ def create_server(config: AppConfig, client: SynologyClient) -> FastMCP:
     register_health_tools(mcp, client)
     register_diagnostic_tools(mcp, client)
 
-    # Read tier — file browsing
+    # Read tier — file browsing + DNS/ABB status (Eddington fork extension)
     if tier in ("read", "write"):
         register_read_tools(mcp, client)
+        register_dns_read_tools(mcp, client)
+        register_backup_read_tools(mcp, client)
 
-    # Write tier — file mutations + power management
+    # Write tier — file mutations, power management, DNS/ABB mutations (Eddington fork extension)
     if tier == "write":
         register_write_tools(mcp, client)
         register_power_tools(mcp, client)
+        register_dns_write_tools(mcp, client)
+        register_backup_write_tools(mcp, client)
 
     return mcp
