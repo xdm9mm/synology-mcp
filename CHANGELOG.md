@@ -2,6 +2,14 @@
 
 All notable changes to the Synology MCP Server are documented in this file.
 
+## [3.0.2] - 2026-11-03
+
+### Fixed
+- **NAS connections survive host reboots.** The container could start before
+  its network was routable, the single login attempt failed, and the NAS stayed
+  disconnected until a manual restart. `SynologyClient.connect` now waits up to
+  60 seconds for the DSM port before logging in.
+
 ## [3.0.1] - 2026-06-16
 
 ### Fixed

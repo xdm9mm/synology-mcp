@@ -1,5 +1,6 @@
 """Synology DSM client wrapper for multi-NAS management."""
 
+import asyncio
 from typing import Any
 
 import aiohttp
@@ -8,6 +9,38 @@ from synology_dsm import SynologyDSM
 from .config import NasConfig
 from .direct_client import DirectApiClient
 from .session_retry import with_session_retry
+
+STARTUP_WAIT_SECONDS = 60.0
+STARTUP_WAIT_INTERVAL = 2.0
+
+
+async def wait_for_host(
+    host: str,
+    port: int,
+    timeout: float = STARTUP_WAIT_SECONDS,
+    interval: float = STARTUP_WAIT_INTERVAL,
+) -> bool:
+    """Wait until a NAS accepts TCP connections; False if it never does.
+
+    At boot this container can start before its network is routable, and
+    ``SynologyClient.connect`` only logs in once, so a failed attempt left the
+    NAS disconnected until the next restart. This probes the port instead of
+    retrying the login, so bad credentials can't trip DSM's auto-block.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), interval
+            )
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except (OSError, asyncio.TimeoutError):
+            if loop.time() >= deadline:
+                return False
+            await asyncio.sleep(interval)
 
 
 class SessionRetryingSynologyDSM(SynologyDSM):
@@ -70,6 +103,8 @@ class SynologyClient:
         )
         for config in configs:
             self._configs[config.name] = config
+            if not await wait_for_host(config.host, config.port):
+                print(f"{config.name} ({config.host}:{config.port}) not reachable")
             api = SessionRetryingSynologyDSM(
                 self._session,
                 config.host,
